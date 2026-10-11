@@ -37,6 +37,11 @@ on:
           - Standard
           - Force
           - Dry-Run
+      enable_azure_login:
+        description: "Perform live Azure OIDC login (Enable only when Azure secrets are configured)"
+        required: false
+        default: false
+        type: boolean
 
   # Triggered via ServiceNow Flow Designer / REST Message Webhook
   repository_dispatch:
@@ -56,6 +61,7 @@ jobs:
       app_version: ${{ steps.discover.outputs.app_version }}
       deployment_mode: ${{ steps.discover.outputs.deployment_mode }}
       sctask_number: ${{ steps.discover.outputs.sctask_number }}
+      enable_azure_login: ${{ steps.discover.outputs.enable_azure_login }}
     steps:
       - name: "Checkout Repository"
         uses: actions/checkout@v4
@@ -77,6 +83,7 @@ jobs:
               $sctaskNum = "${{ github.event.client_payload.sctask_number }}".Trim()
               $versionOverride = "${{ github.event.client_payload.version }}".Trim()
               $deployMode = if ("${{ github.event.client_payload.deployment_mode }}") { "${{ github.event.client_payload.deployment_mode }}".Trim() } else { "Standard" }
+              $enableAzure = if ("${{ github.event.client_payload.enable_azure_login }}" -eq "true") { "true" } else { "false" }
           } else {
               Write-Host "[DISCOVER] Triggered via manual workflow_dispatch"
               $selectedApp = "${{ inputs.application }}".Trim()
@@ -84,15 +91,17 @@ jobs:
               $sctaskNum = "${{ inputs.sctask_number }}".Trim()
               $versionOverride = "${{ inputs.version }}".Trim()
               $deployMode = "${{ inputs.deployment_mode }}".Trim()
+              $enableAzure = if ("${{ inputs.enable_azure_login }}" -eq "true") { "true" } else { "false" }
           }
 
           if (-not $selectedApp) { $selectedApp = "app01-7zip" }
           if (-not $targetEnv) { $targetEnv = "DEV" }
 
-          Write-Host "[DISCOVER] Application : $selectedApp"
-          Write-Host "[DISCOVER] Environment : $targetEnv"
-          Write-Host "[DISCOVER] SCTASK No   : $(if ($sctaskNum) { $sctaskNum } else { 'None' })"
-          Write-Host "[DISCOVER] Deploy Mode : $deployMode"
+          Write-Host "[DISCOVER] Application       : $selectedApp"
+          Write-Host "[DISCOVER] Environment       : $targetEnv"
+          Write-Host "[DISCOVER] SCTASK No         : $(if ($sctaskNum) { $sctaskNum } else { 'None' })"
+          Write-Host "[DISCOVER] Deploy Mode       : $deployMode"
+          Write-Host "[DISCOVER] Enable Azure Auth : $enableAzure"
 
           $configDir = Join-Path $env:GITHUB_WORKSPACE "config\applications"
           if (-not (Test-Path $configDir)) {
@@ -124,6 +133,7 @@ jobs:
           Add-Content -Path $env:GITHUB_OUTPUT -Value "app_version=$versionOverride"
           Add-Content -Path $env:GITHUB_OUTPUT -Value "deployment_mode=$deployMode"
           Add-Content -Path $env:GITHUB_OUTPUT -Value "sctask_number=$sctaskNum"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "enable_azure_login=$enableAzure"
 
   deploy-applications:
     name: "Run Pipeline"
@@ -140,3 +150,5 @@ jobs:
       version: ${{ needs.discover-applications.outputs.app_version }}
       deployment_mode: ${{ needs.discover-applications.outputs.deployment_mode }}
       sctask_number: ${{ needs.discover-applications.outputs.sctask_number }}
+      enable_azure_login: ${{ needs.discover-applications.outputs.enable_azure_login == 'true' }}
+    secrets: inherit
