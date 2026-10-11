@@ -1,0 +1,39 @@
+# Application Configuration: 7-Zip Enterprise (Win32 Intune Deployment)
+id: "app01-7zip"
+name: "7-Zip 23.01 x64 Enterprise"
+version: "23.01"
+publisher: "Igor Pavlov"
+description: "High-compression file archiver utility for enterprise deployment."
+target_platform: "Intune_Win32"
+
+source:
+  type: "direct_url" # Supported: github_repo, vcme_vm, aws_dfs, azure_blob, direct_url
+  uri: "https://7-zip.org/a/7z2301-x64.exe"
+  filename: "7z2301-x64.exe"
+
+build:
+  type: "intunewin"
+  setup_file: "7z2301-x64.exe"
+  install_command: "7z2301-x64.exe /S"
+  uninstall_command: "\"C:\\Program Files\\7-Zip\\Uninstall.exe\" /S"
+
+detection:
+  type: "file"
+  file_path: "C:\\Program Files\\7-Zip\\7z.exe"
+  detection_type: "exists"
+
+requirements:
+  os_architecture: "x64"
+  minimum_supported_windows_release: "10_1909"
+
+assignments:
+  intent: "Required"
+  included_groups:
+    - "SG-Intune-App-7Zip-Required-DEV"
+    - "SG-Intune-App-7Zip-Required-PROD"
+  excluded_groups:
+    - "SG-Intune-App-7Zip-Excluded"
+
+servicenow:
+  auto_approval: true
+  assignment_group: "EUC Endpoint Management"

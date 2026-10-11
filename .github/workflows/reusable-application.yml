@@ -1,0 +1,324 @@
+name: "Intune App Factory - Reusable Application Workflow"
+
+on:
+  workflow_call:
+    inputs:
+      app_id:
+        description: "Application Identifier (e.g. app01-7zip)"
+        required: true
+        type: string
+      environment:
+        description: "Target Environment (DEV, TEST, UAT, PROD)"
+        required: true
+        type: string
+      version:
+        description: "Application Version Override"
+        required: false
+        type: string
+      deployment_mode:
+        description: "Deployment Mode (Standard, Force, Dry-Run)"
+        required: true
+        type: string
+      sctask_number:
+        description: "ServiceNow SCTASK Number"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # ============================================================================
+  # STAGE 1: INITIALIZE
+  # ============================================================================
+  initialize:
+    name: "1. Initialize Stage"
+    runs-on: windows-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      build_id: ${{ steps.init.outputs.build_id }}
+      app_name: ${{ steps.init.outputs.app_name }}
+      app_version: ${{ steps.init.outputs.app_version }}
+      target_platform: ${{ steps.init.outputs.target_platform }}
+      config_json: ${{ steps.init.outputs.config_json }}
+    steps:
+      - name: "Checkout Code"
+        uses: actions/checkout@v4
+
+      - name: "Execute Initialize Script"
+        id: init
+        shell: powershell
+        run: |
+          ./scripts/initialize/init-app.ps1 `
+            -AppId "${{ inputs.app_id }}" `
+            -Environment "${{ inputs.environment }}" `
+            -VersionOverride "${{ inputs.version }}" `
+            -DeploymentMode "${{ inputs.deployment_mode }}"
+
+      - name: "ServiceNow Dispatch Initialization"
+        if: inputs.sctask_number != ''
+        shell: powershell
+        run: |
+          ./scripts/servicenow/servicenow-integration.ps1 `
+            -Action "StartTask" `
+            -TaskNumber "${{ inputs.sctask_number }}" `
+            -AppId "${{ inputs.app_id }}" `
+            -Environment "${{ inputs.environment }}" `
+            -BuildId "${{ steps.init.outputs.build_id }}" `
+            -KeyVaultName "${{ secrets.KEY_VAULT_NAME || vars.KEY_VAULT_NAME }}"
+
+  # ============================================================================
+  # STAGE 2: PREPARE
+  # ============================================================================
+  prepare:
+    name: "2. Prepare Stage"
+    needs: initialize
+    runs-on: windows-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: "Checkout Code"
+        uses: actions/checkout@v4
+
+      - name: "Execute Prepare Script"
+        shell: powershell
+        run: |
+          ./scripts/prepare/prepare-env.ps1 `
+            -AppId "${{ inputs.app_id }}" `
+            -Environment "${{ inputs.environment }}" `
+            -BuildId "${{ needs.initialize.outputs.build_id }}"
+
+  # ============================================================================
+  # STAGE 3: VALIDATE
+  # ============================================================================
+  validate:
+    name: "3. Validate Stage"
+    needs: [initialize, prepare]
+    runs-on: windows-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: "Checkout Code"
+        uses: actions/checkout@v4
+
+      - name: "Azure OIDC Login"
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID || vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID || vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: "Execute Validate Script"
+        shell: powershell
+        run: |
+          ./scripts/validate/validate-config.ps1 `
+            -AppId "${{ inputs.app_id }}" `
+            -Environment "${{ inputs.environment }}" `
+            -KeyVaultName "${{ secrets.KEY_VAULT_NAME || vars.KEY_VAULT_NAME }}"
+
+  # ============================================================================
+  # STAGE 4: COMPARE
+  # ============================================================================
+  compare:
+    name: "4. Compare Stage"
+    needs: [initialize, validate]
+    runs-on: windows-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      skip_deployment: ${{ steps.cmp.outputs.skip_deployment }}
+    steps:
+      - name: "Checkout Code"
+        uses: actions/checkout@v4
+
+      - name: "Azure OIDC Login"
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID || vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID || vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: "Execute Compare Script"
+        id: cmp
+        shell: powershell
+        run: |
+          ./scripts/compare/compare-version.ps1 `
+            -AppId "${{ inputs.app_id }}" `
+            -Environment "${{ inputs.environment }}" `
+            -RequestedVersion "${{ needs.initialize.outputs.app_version }}" `
+            -DeploymentMode "${{ inputs.deployment_mode }}"
+
+  # ============================================================================
+  # STAGE 5: DOWNLOAD
+  # ============================================================================
+  download:
+    name: "5. Download Stage"
+    needs: [initialize, compare]
+    if: needs.compare.outputs.skip_deployment != 'true'
+    runs-on: windows-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: "Checkout Code"
+        uses: actions/checkout@v4
+
+      - name: "Execute Download Script"
+        shell: powershell
+        run: |
+          ./scripts/download/fetch-source.ps1 `
+            -AppId "${{ inputs.app_id }}" `
+            -Environment "${{ inputs.environment }}" `
+            -BuildId "${{ needs.initialize.outputs.build_id }}"
+
+  # ============================================================================
+  # STAGE 6: BUILD
+  # ============================================================================
+  build:
+    name: "6. Build Stage"
+    needs: [initialize, download]
+    if: needs.compare.outputs.skip_deployment != 'true'
+    runs-on: windows-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: "Checkout Code"
+        uses: actions/checkout@v4
+
+      - name: "Execute Build Script"
+        shell: powershell
+        run: |
+          ./scripts/build/build-app.ps1 `
+            -AppId "${{ inputs.app_id }}" `
+            -Environment "${{ inputs.environment }}" `
+            -BuildId "${{ needs.initialize.outputs.build_id }}"
+
+  # ============================================================================
+  # STAGE 7: ARCHIVE
+  # ============================================================================
+  archive:
+    name: "7. Archive Stage"
+    needs: [initialize, build]
+    if: needs.compare.outputs.skip_deployment != 'true'
+    runs-on: windows-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: "Checkout Code"
+        uses: actions/checkout@v4
+
+      - name: "Execute Archive Script"
+        shell: powershell
+        run: |
+          ./scripts/archive/archive-artifact.ps1 `
+            -AppId "${{ inputs.app_id }}" `
+            -AppVersion "${{ needs.initialize.outputs.app_version }}" `
+            -BuildId "${{ needs.initialize.outputs.build_id }}"
+
+      - name: "Upload Pipeline Artifacts"
+        uses: actions/upload-artifact@v4
+        with:
+          name: "${{ inputs.app_id }}-${{ needs.initialize.outputs.app_version }}-${{ needs.initialize.outputs.build_id }}"
+          path: "artifacts/"
+          retention-days: 14
+
+  # ============================================================================
+  # STAGE 8: PUBLISH
+  # ============================================================================
+  publish:
+    name: "8. Publish Stage"
+    needs: [initialize, archive]
+    if: needs.compare.outputs.skip_deployment != 'true'
+    runs-on: windows-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: "Checkout Code"
+        uses: actions/checkout@v4
+
+      - name: "Azure OIDC Login"
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID || vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID || vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: "Execute Publish Script"
+        shell: powershell
+        run: |
+          ./scripts/publish/publish-package.ps1 `
+            -AppId "${{ inputs.app_id }}" `
+            -Environment "${{ inputs.environment }}" `
+            -BuildId "${{ needs.initialize.outputs.build_id }}" `
+            -KeyVaultName "${{ secrets.KEY_VAULT_NAME || vars.KEY_VAULT_NAME }}"
+
+  # ============================================================================
+  # STAGE 9: ASSIGN & DEPLOY
+  # ============================================================================
+  assign:
+    name: "9. Assign & Deploy Stage"
+    needs: [initialize, publish]
+    if: needs.compare.outputs.skip_deployment != 'true'
+    runs-on: windows-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: "Checkout Code"
+        uses: actions/checkout@v4
+
+      - name: "Azure OIDC Login"
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID || vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID || vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: "ServiceNow Task Progress Update"
+        shell: powershell
+        run: |
+          if ("${{ inputs.sctask_number }}") {
+            ./scripts/servicenow/servicenow-integration.ps1 `
+              -Action "UpdateNote" `
+              -TaskNumber "${{ inputs.sctask_number }}" `
+              -AppId "${{ inputs.app_id }}" `
+              -Environment "${{ inputs.environment }}" `
+              -BuildId "${{ needs.initialize.outputs.build_id }}" `
+              -Message "Commencing Intune Win32 deployment and assignment..." `
+              -KeyVaultName "${{ secrets.KEY_VAULT_NAME || vars.KEY_VAULT_NAME }}"
+          } else {
+            ./scripts/servicenow/servicenow-integration.ps1 `
+              -Action "CreateTask" `
+              -AppId "${{ inputs.app_id }}" `
+              -Environment "${{ inputs.environment }}" `
+              -BuildId "${{ needs.initialize.outputs.build_id }}" `
+              -KeyVaultName "${{ secrets.KEY_VAULT_NAME || vars.KEY_VAULT_NAME }}"
+          }
+
+      - name: "Execute Intune / VMSS Deployment & Assignment"
+        shell: powershell
+        run: |
+          ./scripts/assign/deploy-intune-vmss.ps1 `
+            -AppId "${{ inputs.app_id }}" `
+            -Environment "${{ inputs.environment }}" `
+            -BuildId "${{ needs.initialize.outputs.build_id }}" `
+            -KeyVaultName "${{ secrets.KEY_VAULT_NAME || vars.KEY_VAULT_NAME }}"
+
+      - name: "ServiceNow Task Closure (Success)"
+        if: success()
+        shell: powershell
+        run: |
+          ./scripts/servicenow/servicenow-integration.ps1 `
+            -Action "CloseTask" `
+            -TaskNumber "${{ inputs.sctask_number }}" `
+            -AppId "${{ inputs.app_id }}" `
+            -Environment "${{ inputs.environment }}" `
+            -BuildId "${{ needs.initialize.outputs.build_id }}" `
+            -Status "Successful" `
+            -KeyVaultName "${{ secrets.KEY_VAULT_NAME || vars.KEY_VAULT_NAME }}"
+
+      - name: "ServiceNow Task Closure (Failure)"
+        if: failure()
+        shell: powershell
+        run: |
+          ./scripts/servicenow/servicenow-integration.ps1 `
+            -Action "CloseTask" `
+            -TaskNumber "${{ inputs.sctask_number }}" `
+            -AppId "${{ inputs.app_id }}" `
+            -Environment "${{ inputs.environment }}" `
+            -BuildId "${{ needs.initialize.outputs.build_id }}" `
+            -Status "Failed" `
+            -Message "Intune App Factory pipeline failure detected during Stage 9 (Assign/Deploy)." `
+            -KeyVaultName "${{ secrets.KEY_VAULT_NAME || vars.KEY_VAULT_NAME }}"

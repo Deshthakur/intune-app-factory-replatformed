@@ -1,0 +1,36 @@
+# Application Configuration: Visual Studio Code (Azure VMSS / Developer Desktop Deployment)
+id: "app02-vscode"
+name: "Visual Studio Code 1.85 Enterprise"
+version: "1.85.0"
+publisher: "Microsoft Corporation"
+description: "Code editing redefined and optimized for building modern web and cloud applications."
+target_platform: "Azure_VMSS"
+
+source:
+  type: "aws_dfs" # Supported: github_repo, vcme_vm, aws_dfs, azure_blob, direct_url
+  uri: "\\\\aws-dfs.internal.net\\software\\vscode\\1.85.0"
+  filename: "VSCodeSetup-x64-1.85.0.exe"
+
+build:
+  type: "powershell"
+  setup_file: "VSCodeSetup-x64-1.85.0.exe"
+  install_command: "VSCodeSetup-x64-1.85.0.exe /verysilent /mergetasks=\"!runcode\""
+  uninstall_command: "\"C:\\Program Files\\Microsoft VS Code\\unins000.exe\" /verysilent"
+
+detection:
+  type: "registry"
+  registry_key: "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{EA49303C-7219-42E2-A82B-D7858D3AC161}_is1"
+
+requirements:
+  os_architecture: "x64"
+  minimum_supported_windows_release: "10_2004"
+
+assignments:
+  intent: "Required"
+  included_groups:
+    - "SG-VMSS-DevWorkstations-Pool"
+  excluded_groups: []
+
+servicenow:
+  auto_approval: false
+  assignment_group: "Cloud Workstation Engineering"

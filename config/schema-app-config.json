@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ApplicationConfig",
+  "type": "object",
+  "required": ["id", "name", "version", "publisher", "target_platform", "source", "build", "assignments"],
+  "properties": {
+    "id": { "type": "string" },
+    "name": { "type": "string" },
+    "version": { "type": "string" },
+    "publisher": { "type": "string" },
+    "description": { "type": "string" },
+    "target_platform": {
+      "type": "string",
+      "enum": ["Intune_Win32", "Azure_VMSS", "Hybrid"]
+    },
+    "source": {
+      "type": "object",
+      "required": ["type", "uri", "filename"],
+      "properties": {
+        "type": { "type": "string", "enum": ["github_repo", "vcme_vm", "aws_dfs", "azure_blob", "direct_url"] },
+        "uri": { "type": "string" },
+        "filename": { "type": "string" }
+      }
+    },
+    "build": {
+      "type": "object",
+      "required": ["type", "setup_file", "install_command", "uninstall_command"],
+      "properties": {
+        "type": { "type": "string", "enum": ["intunewin", "powershell", "exe", "msi", "none"] },
+        "setup_file": { "type": "string" },
+        "install_command": { "type": "string" },
+        "uninstall_command": { "type": "string" }
+      }
+    },
+    "detection": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["msi", "registry", "file", "script"] },
+        "product_code": { "type": "string" },
+        "file_path": { "type": "string" }
+      }
+    },
+    "requirements": {
+      "type": "object",
+      "properties": {
+        "os_architecture": { "type": "string" },
+        "minimum_supported_windows_release": { "type": "string" }
+      }
+    },
+    "assignments": {
+      "type": "object",
+      "required": ["intent", "included_groups"],
+      "properties": {
+        "intent": { "type": "string", "enum": ["Required", "Available", "Uninstall"] },
+        "included_groups": { "type": "array", "items": { "type": "string" } },
+        "excluded_groups": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "servicenow": {
+      "type": "object",
+      "properties": {
+        "auto_approval": { "type": "boolean" },
+        "assignment_group": { "type": "string" }
+      }
+    }
+  }
+}

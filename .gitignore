@@ -1,0 +1,23 @@
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Pipeline runtime and artifact caches
+artifacts/
+build/
+output/
+dist/
+*.intunewin
+*.zip
+*.msi
+*.exe
+!sample-app/*.exe
+!sample-app/*.msi
+
+# PowerShell / IDE
+.vscode/
+*.log
+*.tmp

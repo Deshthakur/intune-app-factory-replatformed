@@ -1,0 +1,37 @@
+# Application Configuration: Custom Finance App (Source stored in GitHub Repository)
+id: "app03-github-repo"
+name: "Enterprise Finance Analytics Desktop"
+version: "3.2.0"
+publisher: "Internal Finance Engineering"
+description: "Desktop analytics suite checked out from application GitHub repository."
+target_platform: "Intune_Win32"
+
+source:
+  type: "github_repo" # Explicitly configured for GitHub Repository source
+  uri: "my-enterprise-org/finance-app-repo"
+  ref: "v3.2.0"
+  filename: "FinanceSetup-v3.2.0.exe"
+
+build:
+  type: "intunewin"
+  setup_file: "FinanceSetup-v3.2.0.exe"
+  install_command: "FinanceSetup-v3.2.0.exe /VERYSILENT"
+  uninstall_command: "\"C:\\Program Files\\Enterprise Finance\\uninstall.exe\" /S"
+
+detection:
+  type: "file"
+  file_path: "C:\\Program Files\\Enterprise Finance\\FinanceApp.exe"
+
+requirements:
+  os_architecture: "x64"
+  minimum_supported_windows_release: "10_1909"
+
+assignments:
+  intent: "Required"
+  included_groups:
+    - "SG-Intune-Finance-Users"
+  excluded_groups: []
+
+servicenow:
+  auto_approval: true
+  assignment_group: "Finance App Support"

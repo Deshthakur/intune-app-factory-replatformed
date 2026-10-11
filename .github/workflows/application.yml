@@ -1,0 +1,142 @@
+name: "Intune App Factory - Main Automation Workflow"
+
+on:
+  workflow_dispatch:
+    inputs:
+      application:
+        description: "Select application to deploy (e.g., app01-7zip, app02-vscode, or ALL)"
+        required: true
+        default: "app01-7zip"
+        type: string
+      environment:
+        description: "Target Environment"
+        required: true
+        default: "DEV"
+        type: choice
+        options:
+          - DEV
+          - TEST
+          - UAT
+          - PROD
+      sctask_number:
+        description: "ServiceNow SCTASK Number (e.g., SCTASK0012345 - Optional)"
+        required: false
+        default: ""
+        type: string
+      version:
+        description: "Specific application version override (Optional)"
+        required: false
+        default: ""
+        type: string
+      deployment_mode:
+        description: "Deployment execution mode"
+        required: true
+        default: "Standard"
+        type: choice
+        options:
+          - Standard
+          - Force
+          - Dry-Run
+
+  # Triggered via ServiceNow Flow Designer / REST Message Webhook
+  repository_dispatch:
+    types: [servicenow_sctask_dispatch]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  discover-applications:
+    name: "Discover Application Configurations"
+    runs-on: windows-latest
+    outputs:
+      app_matrix: ${{ steps.discover.outputs.app_matrix }}
+      target_environment: ${{ steps.discover.outputs.target_environment }}
+      app_version: ${{ steps.discover.outputs.app_version }}
+      deployment_mode: ${{ steps.discover.outputs.deployment_mode }}
+      sctask_number: ${{ steps.discover.outputs.sctask_number }}
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+
+      - name: "Discover & Filter Applications"
+        id: discover
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          # Determine trigger type (repository_dispatch from ServiceNow vs manual workflow_dispatch)
+          $isWebhook = "${{ github.event_name }}" -eq "repository_dispatch"
+          
+          if ($isWebhook) {
+              Write-Host "[DISCOVER] Triggered via ServiceNow repository_dispatch Webhook!"
+              $selectedApp = "${{ github.event.client_payload.application }}".Trim()
+              $targetEnv = "${{ github.event.client_payload.environment }}".Trim()
+              $sctaskNum = "${{ github.event.client_payload.sctask_number }}".Trim()
+              $versionOverride = "${{ github.event.client_payload.version }}".Trim()
+              $deployMode = if ("${{ github.event.client_payload.deployment_mode }}") { "${{ github.event.client_payload.deployment_mode }}".Trim() } else { "Standard" }
+          } else {
+              Write-Host "[DISCOVER] Triggered via manual workflow_dispatch"
+              $selectedApp = "${{ inputs.application }}".Trim()
+              $targetEnv = "${{ inputs.environment }}".Trim()
+              $sctaskNum = "${{ inputs.sctask_number }}".Trim()
+              $versionOverride = "${{ inputs.version }}".Trim()
+              $deployMode = "${{ inputs.deployment_mode }}".Trim()
+          }
+
+          if (-not $selectedApp) { $selectedApp = "app01-7zip" }
+          if (-not $targetEnv) { $targetEnv = "DEV" }
+
+          Write-Host "[DISCOVER] Application : $selectedApp"
+          Write-Host "[DISCOVER] Environment : $targetEnv"
+          Write-Host "[DISCOVER] SCTASK No   : $(if ($sctaskNum) { $sctaskNum } else { 'None' })"
+          Write-Host "[DISCOVER] Deploy Mode : $deployMode"
+
+          $configDir = Join-Path $env:GITHUB_WORKSPACE "config\applications"
+          if (-not (Test-Path $configDir)) {
+              Write-Error "Configuration directory not found at: $configDir"
+          }
+
+          $allConfigFiles = Get-ChildItem -Path $configDir -Filter "*.yml" | Where-Object { $_.Name -notlike "_*" }
+          if ($allConfigFiles.Count -eq 0) {
+              Write-Error "No application configuration YAML files found in $configDir"
+          }
+
+          $apps = @()
+          foreach ($file in $allConfigFiles) {
+              $appId = $file.BaseName
+              if ($selectedApp -eq "ALL" -or $selectedApp -eq $appId) {
+                  $apps += @{ id = $appId; config_file = $file.Name }
+              }
+          }
+
+          if ($apps.Count -eq 0) {
+              Write-Error "Selected application '$selectedApp' not found in $configDir"
+          }
+
+          $jsonMatrix = ConvertTo-Json -InputObject $apps -Compress
+          Write-Host "Discovered applications matrix: $jsonMatrix"
+
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "app_matrix=$jsonMatrix"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "target_environment=$targetEnv"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "app_version=$versionOverride"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "deployment_mode=$deployMode"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "sctask_number=$sctaskNum"
+
+  deploy-applications:
+    name: "Run Pipeline"
+    needs: discover-applications
+    strategy:
+      matrix:
+        app: ${{ fromJson(needs.discover-applications.outputs.app_matrix) }}
+      fail-fast: false
+      max-parallel: 5
+    uses: ./.github/workflows/reusable-application.yml
+    with:
+      app_id: ${{ matrix.app.id }}
+      environment: ${{ needs.discover-applications.outputs.target_environment }}
+      version: ${{ needs.discover-applications.outputs.app_version }}
+      deployment_mode: ${{ needs.discover-applications.outputs.deployment_mode }}
+      sctask_number: ${{ needs.discover-applications.outputs.sctask_number }}
