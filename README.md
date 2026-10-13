@@ -1,15 +1,29 @@
-# Intune App Factory – Replatformed Architecture CI/CD Automation Framework
+# Intune App Factory – Replatformed Architecture & ServiceNow Bi-Directional Integration
 
-Welcome to the enterprise-grade, configuration-driven **Intune App Factory** CI/CD automation framework. This repository provides a scalable, secure, and unified GitHub Actions pipeline capable of building, packaging, publishing, and deploying **approximately 30 applications** (and beyond) without repeating workflow code.
+> **Enterprise CI/CD Automation Framework for Zero-Touch Application Packaging (.intunewin), Microsoft Intune Deployment, and ServiceNow SCTASK Closed-Loop Lifecycle Management.**
 
 ---
 
-## 🏛️ Architecture & System Topology
+## 📋 Executive Overview (Client & Architecture Summary)
+
+In enterprise IT endpoint management, traditional application onboarding suffers from:
+- **Manual, slow hand-offs**: Packaging requests sit idle in ITSM queues.
+- **Disconnected toolchains**: Engineers manually package binaries using `IntuneWinAppUtil.exe` on desktop machines.
+- **Compliance gaps**: Lack of audit linkage between ServiceNow tickets, GitHub commits, build artifacts, and deployed Intune applications.
+
+**Intune App Factory** replatforms this workflow into a **fully automated, bi-directional, event-driven CI/CD ecosystem**:
+1. **ServiceNow $\to$ GitHub Actions**: Approval of a Service Catalog task (`SCTASK`) automatically dispatches a parameterized pipeline.
+2. **GitHub Actions $\to$ ServiceNow**: The pipeline acknowledges the ticket, transitions it to *Work in Progress*, streams run links to Work Notes, and **auto-closes** the ticket upon deployment verification (or flags errors with failure diagnostics).
+3. **Enterprise Scalability**: Powered by reusable workflows, configuration-driven YAML manifests, Azure VM Scale Set (VMSS) self-hosted Windows runners, and Microsoft Entra ID Workload Identity (OIDC).
+
+---
+
+## 🏛️ System Architecture Topology
 
 ```
                   ┌────────────────────────────────────────────────────────┐
-                  │              Application Sources                       │
-                  │  - vCME VM  - AWS DFS FileShare  - GitHub  - Azure Blob│
+                  │              Application Source Repositories           │
+                  │  - vCME VM  - AWS DFS FileShares  - GitHub  - Azure Blob│
                   └───────────────────────────┬────────────────────────────┘
                                               │
                                               ▼
@@ -33,257 +47,242 @@ Welcome to the enterprise-grade, configuration-driven **Intune App Factory** CI/
          │                                               │                                │
          ▼                                               ▼                                ▼
 ┌──────────────────────┐                     ┌──────────────────────┐         ┌──────────────────────┐
-│ Microsoft Entra ID   │                     │ Azure Services       │         │ ServiceNow ITSM      │
-│ (OIDC Auth / WIF)    │                     │ - Azure Key Vault    │         │ - Create SCTASK      │
-│                      │                     │ - Azure VMSS         │         │ - Approval Check     │
-│ Microsoft Graph API  │                     │ - Azure Monitor / LA │         │ - Close SCTASK       │
-│ (Intune Win32 Apps)  │                     │ - Azure Blob Storage │         │                      │
+│ Microsoft Entra ID   │                     │ Azure Infrastructure │         │ ServiceNow ITSM      │
+│ (OIDC Auth / WIF)    │                     │ - Azure Key Vault    │         │ - RITM / SCTASK      │
+│                      │                     │ - Azure VMSS Runners │         │ - Flow Designer Hook │
+│ Microsoft Graph API  │                     │ - Azure Monitor / LA │         │ - Bi-directional API │
+│ (Intune Win32 Apps)  │                     │ - Azure Storage Blob │         │ - Auto-closure       │
 └──────────────────────┘                     └──────────────────────┘         └──────────────────────┘
 ```
 
 ---
 
-## 📁 Repository Structure
+## 🔄 End-to-End Bi-Directional Sequence Flow
 
-```
-.github/
-  workflows/
-    application.yml             # Main trigger workflow with workflow_dispatch & app discovery
-    reusable-application.yml    # Reusable workflow containing the 9 sequential pipeline stages
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Requester as End User / App Owner
+    participant SNOW as ServiceNow (RITM / SCTASK)
+    participant GHA as GitHub Actions Orchestrator
+    participant Runner as Azure VMSS Windows Runner
+    participant Graph as Microsoft Graph (Intune)
 
-config/
-  schema-app-config.json        # JSON Schema for validating application YAML configurations
-  applications/
-    app01-7zip.yml              # Sample config: 7-Zip Enterprise (Intune Win32 App target)
-    app02-vscode.yml            # Sample config: VS Code (Azure VMSS target)
-    ...                         # Add app03.yml through app30.yml here
+    Requester->>SNOW: Submit App Onboarding Request (Catalog)
+    SNOW->>SNOW: CAB / Manager Approvals Completed
+    SNOW->>SNOW: SCTASK Created (State: Open)
 
-scripts/
-  common/
-    azure-auth.ps1              # Helper module for OIDC token acquisition & Key Vault lookup
-  initialize/
-    init-app.ps1                # Stage 1: Load config, generate Build ID, set outputs
-  prepare/
-    prepare-env.ps1             # Stage 2: Create directories, install IntuneWinAppUtil
-  validate/
-    validate-config.ps1         # Stage 3: Schema validation, Key Vault & permission checks
-  compare/
-    compare-version.ps1         # Stage 4: Version comparison vs Intune/VMSS baseline
-  download/
-    fetch-source.ps1            # Stage 5: Fetch installer from GitHub/vCME/AWS DFS/Blob
-  build/
-    build-app.ps1              # Stage 6: Build/Package installer into .intunewin or executable
-  archive/
-    archive-artifact.ps1        # Stage 7: Generate zip bundle (app-version-buildnumber.zip)
-  publish/
-    publish-package.ps1         # Stage 8: Upload package to Azure Storage Blob repository
-  assign/
-    deploy-intune-vmss.ps1      # Stage 9: Graph API Win32 deployment & VMSS run-command
-  servicenow/
-    servicenow-integration.ps1  # ServiceNow SCTASK creation, update, and closure helper
-```
+    rect rgb(240, 248, 255)
+    note right of SNOW: Phase 1: Forward Dispatch (ServiceNow → GitHub)
+    SNOW->>GHA: POST /repos/{owner}/{repo}/dispatches (repository_dispatch)
+    Note over SNOW,GHA: Payload: SCTASK Number, App ID, Version, Env
+    end
 
----
+    rect rgb(255, 250, 240)
+    note right of GHA: Phase 2: In-Progress Status (GitHub → ServiceNow)
+    GHA->>Runner: Spawn Job: Stage 1 (Initialize)
+    Runner->>SNOW: PATCH /api/now/table/sc_task/{sys_id}
+    Note over Runner,SNOW: State: 2 (Work in Progress)<br/>Work Notes: "Pipeline Started + GitHub Run URL"
+    end
 
-## 🔒 1. Complete Authentication Flow
+    rect rgb(245, 255, 245)
+    note right of Runner: Phase 3: Core Pipeline Execution (9 Stages)
+    Runner->>Runner: 2. Prepare Environment & Tools (IntuneWinAppUtil)
+    Runner->>Runner: 3. Validate App Config & Schema
+    Runner->>Runner: 4. Compare Requested Version vs Intune Baseline
+    Runner->>Runner: 5. Download Source Installer Binary
+    Runner->>Runner: 6. Build .intunewin Package
+    Runner->>Runner: 7. Archive Bundle & Manifest Evidence
+    Runner->>Runner: 8. Publish Package to Enterprise Storage
+    Runner->>Graph: 9. Create Win32 App & Assign Target Entra Groups
+    end
 
-This framework eliminates long-lived credentials by leveraging **GitHub Actions OpenID Connect (OIDC)** federated with **Microsoft Entra ID Workload Identity Federation**.
-
-```
-GitHub Actions Runner
-      │
-      │ (1) Request OIDC JWT Token
-      ▼
-GitHub OIDC Identity Provider (token.actions.githubusercontent.com)
-      │
-      │ (2) Returns Signed JWT Token with repository & environment claims
-      ▼
-Azure Login Action (azure/login@v2)
-      │
-      │ (3) Exchanges JWT Token with Entra ID (login.microsoftonline.com)
-      ▼
-Microsoft Entra ID (Workload Identity Federation)
-      │
-      │ (4) Validates claims & issues short-lived Azure Access Token
-      ▼
-Azure & Microsoft Graph API Context
-      ├─► Access Azure Key Vault (Fetch secrets dynamically at runtime)
-      ├─► Microsoft Graph API (Deploy Win32 Apps & Manage Intune Assignments)
-      └─► Azure VM Scale Sets (Execute VMSS custom deployment commands)
-```
-
-### Required Workflow Permissions
-```yaml
-permissions:
-  id-token: write  # Mandatory for acquiring OIDC token
-  contents: read   # Mandatory for checking out repository code
-```
-
-### Azure Credentials in GitHub Secrets / Variables
-No client secrets are stored in GitHub repository settings. Only non-sensitive identity GUIDs are configured:
-- `AZURE_CLIENT_ID`: Entra ID Application / Managed Identity Client ID
-- `AZURE_TENANT_ID`: Microsoft Entra ID Tenant ID
-- `AZURE_SUBSCRIPTION_ID`: Target Azure Subscription ID
-- `KEY_VAULT_NAME`: Target Azure Key Vault Name (per environment)
-
----
-
-## 🔄 2. The 9 Pipeline Stages Breakdown
-
-The reusable workflow (`reusable-application.yml`) organizes execution into 9 sequential jobs:
-
-| Stage # | Stage Name | Responsibility | Main Script |
-| :--- | :--- | :--- | :--- |
-| **1** | **Initialize** | Parses application configuration, validates inputs, generates unique `BuildId`. | `scripts/initialize/init-app.ps1` |
-| **2** | **Prepare** | Creates workspace directories (`workspace/downloads`, `workspace/output`, `tools`, `artifacts`) and downloads `IntuneWinAppUtil.exe`. | `scripts/prepare/prepare-env.ps1` |
-| **3** | **Validate** | Performs schema validation, checks Key Vault connectivity and Entra permissions. Fails early on missing requirements. | `scripts/validate/validate-config.ps1` |
-| **4** | **Compare** | Compares requested app version against baseline deployed in Intune/VMSS. Sets `skip_deployment=true` if identical in `Standard` mode. | `scripts/compare/compare-version.ps1` |
-| **5** | **Download** | Fetches installer package from configured source (`vCME VM`, `AWS DFS FileShare`, `GitHub`, or `Azure Blob`). | `scripts/download/fetch-source.ps1` |
-| **6** | **Build** | Wraps setup installer into `.intunewin` package using `IntuneWinAppUtil.exe` or executes PowerShell build tasks. | `scripts/build/build-app.ps1` |
-| **7** | **Archive** | Bundles package and metadata manifest into `app-version-buildnumber.zip` and uploads to GitHub Artifacts. | `scripts/archive/archive-artifact.ps1` |
-| **8** | **Publish** | Uploads package binary to enterprise Azure Blob Storage repository under `apps-repository/{ENV}/{AppId}/`. | `scripts/publish/publish-package.ps1` |
-| **9** | **Assign & Deploy** | Performs Intune Win32 App creation/update, requirement rules, group assignment via Microsoft Graph API, or updates VMSS instances. | `scripts/assign/deploy-intune-vmss.ps1` |
-
----
-
-## 🎫 3. ServiceNow SCTASK & RTIM Integration
-
-To guarantee ITIL compliance and change auditing, the pipeline automatically manages ServiceNow Service Requests (RTIM) and Change Tasks (SCTASK):
-
-```
-Pipeline Starts (Assign Stage)
-      │
-      ▼
-Create ServiceNow SCTASK  ──►  Returns Task ID (e.g. SCTASK0094821)
-      │
-      ▼
-Execute Intune / VMSS Deployment
-      │
-      ├─── [SUCCESS] ──► Update SCTASK State to Closed Complete (State=3)
-      │
-      └─── [FAILURE] ──► Update SCTASK State to Closed Incomplete (State=4) & Record Logs
-```
-
-ServiceNow instance credentials (`ServiceNowInstanceUrl`, `ServiceNowApiToken`) are dynamically fetched from Azure Key Vault at runtime.
-
----
-
-## ⚙️ 4. Application Configuration Schema & Example
-
-Applications are defined entirely inside YAML files located in `config/applications/`.
-
-### Example 1: Intune Win32 App (`config/applications/app01-7zip.yml`)
-```yaml
-id: "app01-7zip"
-name: "7-Zip 23.01 x64 Enterprise"
-version: "23.01"
-publisher: "Igor Pavlov"
-description: "High-compression file archiver utility for enterprise deployment."
-target_platform: "Intune_Win32"
-
-source:
-  type: "direct_url" # Options: github_repo, vcme_vm, aws_dfs, azure_blob, direct_url
-  uri: "https://7-zip.org/a/7z2301-x64.exe"
-  filename: "7z2301-x64.exe"
-
-build:
-  type: "intunewin"
-  setup_file: "7z2301-x64.exe"
-  install_command: "7z2301-x64.exe /S"
-  uninstall_command: "\"C:\\Program Files\\7-Zip\\Uninstall.exe\" /S"
-
-detection:
-  type: "file"
-  file_path: "C:\\Program Files\\7-Zip\\7z.exe"
-
-requirements:
-  os_architecture: "x64"
-  minimum_supported_windows_release: "10_1909"
-
-assignments:
-  intent: "Required"
-  included_groups:
-    - "SG-Intune-App-7Zip-Required-DEV"
-    - "SG-Intune-App-7Zip-Required-PROD"
-  excluded_groups:
-    - "SG-Intune-App-7Zip-Excluded"
-
-servicenow:
-  auto_approval: true
-  assignment_group: "EUC Endpoint Management"
+    rect rgb(255, 240, 245)
+    note right of GHA: Phase 4: Feedback & Auto-Closure (GitHub → ServiceNow)
+    alt Pipeline Status: SUCCESS
+        Runner->>SNOW: PATCH /api/now/table/sc_task/{sys_id}
+        Note over Runner,SNOW: State: 3 (Closed Complete)<br/>Close Code: "Closed Successful"<br/>Close Notes: Deployment Verified & Entra Group Assigned
+        SNOW->>Requester: Notification: "App Deployed & Ready in Company Portal"
+    else Pipeline Status: FAILURE
+        Runner->>SNOW: PATCH /api/now/table/sc_task/{sys_id}
+        Note over Runner,SNOW: State: 4 (Closed Incomplete) / On-Hold<br/>Work Notes: "Failed at Stage X. Direct Error Log URL: ..."
+        SNOW->>SNOW: Alert Assigned EUC Specialist
+    end
+    end
 ```
 
 ---
 
-## 🚀 5. How 1 Workflow Supports 30 Applications (Scaling Guide)
+## ⚙️ Phase-by-Phase Technical Specifications
 
-Adding application **#31** requires **ZERO code or workflow modifications**:
+### Phase 1: Forward Dispatch (ServiceNow $\to$ GitHub Actions)
+When an `SCTASK` enters the approved state, ServiceNow **Flow Designer** or an **Outbound REST Message** fires an HTTP webhook to GitHub:
 
-### Step 1: Create Config File
-Create a new file `config/applications/app31-mycustomapp.yml` following the schema above.
+* **Endpoint**: `POST https://api.github.com/repos/Deshthakur/intune-app-factory-replatformed/dispatches`
+* **Headers**:
+  ```http
+  Accept: application/vnd.github+json
+  Authorization: Bearer <GITHUB_ACTIONS_PAT_OR_APP_TOKEN>
+  X-GitHub-Api-Version: 2022-11-28
+  Content-Type: application/json
+  ```
+* **Payload**:
+  ```json
+  {
+    "event_type": "servicenow_sctask_dispatch",
+    "client_payload": {
+      "sctask_number": "SCTASK0010924",
+      "application": "app01-7zip",
+      "environment": "DEV",
+      "version": "23.01",
+      "deployment_mode": "Standard"
+    }
+  }
+  ```
 
-### Step 2: Push to Repository
-Commit and push the configuration file to GitHub:
-```bash
-git add config/applications/app31-mycustomapp.yml
-git commit -m "feat: Onboard App #31 - My Custom App"
-git push origin main
+---
+
+### Phase 2: In-Progress Status & Audit Trail (GitHub $\to$ ServiceNow)
+As soon as the runner picks up Stage 1 (`initialize`), it executes `scripts/servicenow/servicenow-integration.ps1 -Action "StartTask"`.
+
+* **Endpoint**: `PATCH https://<instance>.service-now.com/api/now/table/sc_task/{sys_id}`
+* **Payload**:
+  ```json
+  {
+    "state": "2",
+    "work_notes": "[GitHub Actions Dispatch]\nPipeline initiated for Intune App Factory deployment.\n- Application ID : app01-7zip\n- Environment    : DEV\n- Build ID       : app01-7zip-DEV-20261011-a8f1b2\n- Runner Host    : VMSS-WIN-RUNNER-04\n- Workflow Run   : https://github.com/Deshthakur/intune-app-factory-replatformed/actions/runs/38126197053\n- Timestamp      : 2026-10-13 18:00:00 UTC"
+  }
+  ```
+* **Outcome**: The ticket status instantly moves to **Work in Progress**, eliminating orphan tickets.
+
+---
+
+### Phase 3: The 9-Stage Reusable Pipeline
+
+| Stage | Name | Script Executed | Purpose |
+|---|---|---|---|
+| **1** | **Initialize** | `init-app.ps1` | Parses YAML config, generates unique Build ID, and updates SCTASK to *In Progress*. |
+| **2** | **Prepare** | `prepare-env.ps1` | Sets up clean runner directories, verifies dependencies, and downloads `IntuneWinAppUtil.exe`. |
+| **3** | **Validate** | `validate-config.ps1` | Validates YAML schema integrity, requirements, detection rules, and Key Vault connectivity. |
+| **4** | **Compare** | `compare-version.ps1` | Evaluates requested version against Intune baseline; skips redundant work if already deployed. |
+| **5** | **Download** | `fetch-source.ps1` | Pulls source installer from approved source (`direct_url`, `vcme_vm`, `aws_dfs`, or `azure_blob`). |
+| **6** | **Build** | `build-app.ps1` | Executes `IntuneWinAppUtil.exe` to wrap the installer into enterprise `.intunewin` package. |
+| **7** | **Archive** | `archive-artifact.ps1` | Generates auditable `.zip` evidence bundle containing `.intunewin`, `manifest.json`, and hashes. |
+| **8** | **Publish** | `publish-package.ps1` | Uploads the packaged bundle into central enterprise Azure Storage Blob repository. |
+| **9** | **Assign & Deploy**| `deploy-intune-vmss.ps1`| Uses Microsoft Graph API to publish Win32 app and assign Entra ID groups; closes SCTASK. |
+
+---
+
+### Phase 4: Auto-Closure & Error Handling (GitHub $\to$ ServiceNow)
+
+#### Case A: Success Closure (`if: success()`)
+Upon successful Graph API publication and group assignment:
+* **Endpoint**: `PATCH https://<instance>.service-now.com/api/now/table/sc_task/{sys_id}`
+* **Payload**:
+  ```json
+  {
+    "state": "3",
+    "close_code": "Closed Successful",
+    "close_notes": "[Intune App Factory - Deployment Successful]\nApplication deployment completed and verified.\n- Application ID : app01-7zip\n- Environment    : DEV\n- Status         : Deployed & Assigned\n- Target Groups  : SG-Intune-App-7Zip-Required-DEV\n- Workflow Run   : https://github.com/Deshthakur/intune-app-factory-replatformed/actions/runs/38126197053",
+    "work_notes": "Automated pipeline completion status: Successful. Closing SCTASK."
+  }
+  ```
+
+#### Case B: Failure Alert (`if: failure()`)
+If any stage fails (e.g., checksum mismatch or permission error):
+* **Payload**:
+  ```json
+  {
+    "state": "4",
+    "close_code": "Closed Incomplete",
+    "work_notes": "[Intune App Factory - Deployment Failed]\nApplication deployment encountered an error in the GitHub Actions pipeline.\n- Application ID : app01-7zip\n- Build ID       : app01-7zip-DEV-20261011-a8f1b2\n- Failure Reason : Stage 6 packaging failed. Inspect logs.\n- Direct Logs    : https://github.com/Deshthakur/intune-app-factory-replatformed/actions/runs/38126197053"
+  }
+  ```
+
+---
+
+## 🔒 Enterprise Security & Governance
+
+1. **Zero Long-Lived Credentials (OIDC Workload Identity)**:
+   - Runner connects to Microsoft Azure and Graph API using OpenID Connect (OIDC) JWT exchange (`azure/login@v2`). No client secrets are stored in GitHub.
+2. **Dynamic Key Vault Secret Retrieval**:
+   - Sensitive items like ServiceNow API tokens and private repository endpoints are fetched dynamically from **Azure Key Vault** at runtime.
+3. **Least Privilege ServiceNow Role**:
+   - The integration service identity requires only scoped table permissions (`sc_task` read & write for `state`, `work_notes`, `close_notes`). No administrative roles needed.
+4. **End-to-End Audit Traceability**:
+   - Every ServiceNow ticket contains the exact GitHub Actions Run URL.
+   - Every GitHub Actions artifact contains `manifest.json` detailing runner host, operator, build ID, and timestamp.
+
+---
+
+## 📁 Repository Directory Structure
+
+```
+├── .github/
+│   └── workflows/
+│       ├── application.yml          # Main entrypoint: workflow_dispatch & repository_dispatch
+│       └── reusable-application.yml # 9-stage modular reusable workflow
+├── config/
+│   ├── schema-app-config.json       # JSON Schema definition for app manifests
+│   └── applications/
+│       ├── app01-7zip.yml           # 7-Zip Enterprise Win32 config
+│       ├── app02-vscode.yml         # VS Code Enterprise config
+│       └── app03-github-repo.yml    # GitHub Release-backed app config
+├── scripts/
+│   ├── archive/archive-artifact.ps1
+│   ├── assign/deploy-intune-vmss.ps1
+│   ├── build/build-app.ps1
+│   ├── common/azure-auth.ps1
+│   ├── compare/compare-version.ps1
+│   ├── download/fetch-source.ps1
+│   ├── initialize/init-app.ps1
+│   ├── prepare/prepare-env.ps1
+│   ├── publish/publish-package.ps1
+│   ├── servicenow/servicenow-integration.ps1 # Bi-directional ServiceNow helper
+│   └── validate/validate-config.ps1
+├── .gitignore
+└── README.md
 ```
 
-### Step 3: Execute Pipeline
-Navigate to **Actions** -> **Intune App Factory - Main Automation Workflow** -> **Run workflow**, select `app31-mycustomapp`, target environment, and hit **Run workflow**.
+---
+
+## 💡 Client & Architect Discussion Guide (Meeting Q&A)
+
+### Q1: Why use GitHub Actions instead of orchestrating directly inside ServiceNow?
+> **Answer**: ServiceNow is an ITSM system, not a CI/CD build engine. Compiling `.intunewin` binaries requires a dedicated Windows runtime (`IntuneWinAppUtil.exe`), file system manipulation, checksum verification, and network access to file shares. GitHub Actions with Azure VMSS Windows runners provides scalable compute, version-controlled workflows, and native developer tooling, while ServiceNow remains the system of record for approvals and change governance.
+
+### Q2: What happens if ServiceNow is temporarily unreachable when GitHub Actions finishes?
+> **Answer**: In `scripts/servicenow/servicenow-integration.ps1`, REST calls are wrapped in robust error handling with retries. If ServiceNow is offline, the build artifact and logs remain safely stored in GitHub Actions for 30 days, and an alert is flagged without failing the deployed Intune application.
+
+### Q3: How do we test this without impacting production ServiceNow?
+> **Answer**: The PowerShell script has a built-in `-DryRun` switch. In Dry-Run mode, all ServiceNow REST calls are simulated and logged to the console without mutating any real ServiceNow records.
+
+### Q4: Can this framework handle 30+ applications without copying workflow files?
+> **Answer**: Yes. This is a configuration-driven architecture. The pipeline logic is completely decoupled into `reusable-application.yml`. To add a new application, engineers only create a single YAML file (e.g. `config/applications/app31-slack.yml`) without touching workflow code.
 
 ---
 
-## 🛠️ 6. Zero to Hero Setup & Execution Guide
+## 🧪 Quick Start & Local Dry-Run Testing
 
-Follow these steps to configure your repository from scratch:
+You can test the ServiceNow integration script locally using PowerShell:
 
-### Step 1: Configure Entra ID OIDC Federation
-1. In Azure Portal -> Entra ID -> App Registrations -> Create registration: `app-factory-github-oidc`.
-2. Under **Federated credentials**, add a credential:
-   - Issuer: `https://token.actions.githubusercontent.com`
-   - Subject identifier: `repo:<your-org>/<your-repo>:environment:<DEV/TEST/UAT/PROD>`
-3. Assign RBAC Roles:
-   - **Key Vault Secrets User** on Azure Key Vault.
-   - **Contributor** or custom role on target Azure VMSS resource groups.
-4. Assign Microsoft Graph API Application Permissions:
-   - `DeviceAppManagement-Fluent.ReadWrite.All`
-   - `Group.Read.All`
+```powershell
+# 1. Test Task Start (Simulates updating SCTASK to 'Work in Progress')
+.\scripts\servicenow\servicenow-integration.ps1 `
+  -Action "StartTask" `
+  -TaskNumber "SCTASK0012345" `
+  -AppId "app01-7zip" `
+  -Environment "DEV" `
+  -BuildId "build-test-101" `
+  -DryRun
 
-### Step 2: Configure GitHub Environments & Secrets
-Create environments in GitHub Repository Settings -> **Environments**: `DEV`, `TEST`, `UAT`, `PROD`.
-
-Add variables / secrets under each environment:
-- `AZURE_CLIENT_ID`: `<App Registration Client ID>`
-- `AZURE_TENANT_ID`: `<Entra Tenant ID>`
-- `AZURE_SUBSCRIPTION_ID`: `<Subscription ID>`
-- `KEY_VAULT_NAME`: `<Environment Key Vault Name>`
-
-### Step 3: Triggering a Deployment
-To deploy an application manually:
-1. Go to GitHub Repository -> **Actions**.
-2. Select **Intune App Factory - Main Automation Workflow**.
-3. Fill in inputs:
-   - **Application**: `app01-7zip` (or `ALL` to deploy matrix of all 30 apps)
-   - **Target Environment**: `DEV`
-   - **Version Override**: *(Optional)*
-   - **Deployment Mode**: `Standard`
-4. Click **Run workflow**.
-
----
-
-## 📌 Placeholders & Enterprise Customization (`TODO` Tags)
-
-All environment-specific endpoints and custom enterprise connectors are clearly tagged across scripts with `TODO:` markers:
-
-- `scripts/common/azure-auth.ps1`: Key Vault secret lookup fallback.
-- `scripts/download/fetch-source.ps1`: SMB / WinRM credentials for vCME VM & AWS DFS FileShares.
-- `scripts/publish/publish-package.ps1`: Custom Azure Storage Blob endpoint.
-- `scripts/assign/deploy-intune-vmss.ps1`: Microsoft Graph REST API endpoint call & Azure CLI VMSS run-command.
-- `scripts/servicenow/servicenow-integration.ps1`: Enterprise ServiceNow instance table REST endpoint.
-
----
-
-## 📜 License & Support
-Managed by Senior DevOps & Cloud Architecture Team. Designed for high resilience, auditability, and zero workflow duplication across enterprise application suites.
+# 2. Test Task Auto-Closure (Simulates updating SCTASK to 'Closed Complete')
+.\scripts\servicenow\servicenow-integration.ps1 `
+  -Action "CloseTask" `
+  -TaskNumber "SCTASK0012345" `
+  -AppId "app01-7zip" `
+  -Environment "DEV" `
+  -BuildId "build-test-101" `
+  -Status "Successful" `
+  -DryRun
+```
